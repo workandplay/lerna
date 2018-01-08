@@ -149,7 +149,7 @@ export default class NpmUtilities {
     log.silly("publishTaggedInDir", tag, path.basename(directory));
 
     const opts = NpmUtilities.getExecOpts(directory, registry);
-    ChildProcessUtilities.exec("npm", ["publish", "--tag", tag.trim()], opts, callback);
+    ChildProcessUtilities.exec("npm", ["publish", "--tag", tag.trim(), "--access", "public"], opts, callback);
   }
 
   static getExecOpts(directory, registry) {
