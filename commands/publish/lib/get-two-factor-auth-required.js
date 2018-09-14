@@ -1,16 +1,15 @@
 "use strict";
 
 const log = require("npmlog");
-const childProcess = require("@lerna/child-process");
-const getExecOpts = require("@lerna/get-npm-exec-opts");
+const profile = require("npm-profile");
 const ValidationError = require("@lerna/validation-error");
 
 module.exports = getTwoFactorAuthRequired;
 
-function getTwoFactorAuthRequired(location, { registry }) {
+function getTwoFactorAuthRequired(opts) {
   log.silly("getTwoFactorAuthRequired");
 
-  if (registry && registry !== "https://registry.npmjs.org/") {
+  if (opts.get("registry") !== "https://registry.npmjs.org/") {
     log.warn(
       "ETHIRDPARTY",
       `Skipping two-factor auth as most third-party registries do not support advanced npm functionality`
@@ -19,28 +18,21 @@ function getTwoFactorAuthRequired(location, { registry }) {
     return Promise.resolve(false);
   }
 
-  const args = [
-    "profile",
-    "get",
-    // next parameter is _not_ a typo...
-    "two-factor auth",
-    // immediate feedback from request errors, not excruciatingly slow retries
-    // @see https://docs.npmjs.com/misc/config#fetch-retries
-    "--fetch-retries=0",
-    // including http requests makes raw logging easier to debug for end users
-    "--loglevel=http",
-  ];
-  const opts = getExecOpts({ location }, registry);
+  return profile.get(opts).then(
+    result => {
+      log.silly("2FA", result.tfa);
 
-  // we do not need special log handling
-  delete opts.pkg;
+      if (result.tfa.pending) {
+        // if 2FA is pending, it is disabled
+        return false;
+      }
 
-  return childProcess.exec("npm", args, opts).then(
-    result => result.stdout === "auth-and-writes",
-    ({ stderr }) => {
-      // Log the error cleanly to stderr, it already has npmlog decorations
+      return result.tfa.mode === "auth-and-writes";
+    },
+    err => {
+      // Log the error cleanly to stderr
       log.pause();
-      console.error(stderr); // eslint-disable-line no-console
+      console.error(err.message); // eslint-disable-line no-console
       log.resume();
 
       throw new ValidationError("ETWOFACTOR", "Unable to obtain two-factor auth mode");
