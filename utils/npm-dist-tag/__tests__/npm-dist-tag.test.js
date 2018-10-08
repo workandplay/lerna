@@ -1,114 +1,117 @@
 "use strict";
 
-jest.mock("@lerna/child-process");
-
-const os = require("os");
+jest.mock("npm-registry-fetch");
 
 // mocked modules
-const ChildProcessUtilities = require("@lerna/child-process");
+const fetch = require("npm-registry-fetch");
 
 // file under test
 const npmDistTag = require("..");
 
-describe("dist-tag", () => {
-  ChildProcessUtilities.exec.mockResolvedValue();
+const stubLog = {
+  verbose: jest.fn(),
+  info: jest.fn(),
+  warn: jest.fn(),
+};
+const baseOptions = new Map([["log", stubLog], ["tag", "latest"]]);
 
-  describe("npmDistTag.add()", () => {
-    const pkg = {
-      name: "foo-pkg",
-      version: "1.0.0",
-      location: "/test/npm/dist-tag/add",
-    };
-    const tag = "added-tag";
-    const registry = "https://custom-registry/add";
+fetch.mockImplementation(() => Promise.resolve());
+fetch.json.mockImplementation(() => Promise.resolve({}));
 
-    it("adds a dist-tag for a given package@version", async () => {
-      await npmDistTag.add(pkg, tag, {});
+describe("npmDistTag.add()", () => {
+  it("adds a dist-tag for a given package@version", async () => {
+    const opts = new Map(baseOptions);
+    const tags = await npmDistTag.add("@scope/some-pkg@1.0.1", "added-tag", opts);
 
-      expect(ChildProcessUtilities.exec).lastCalledWith("npm", ["dist-tag", "add", "foo-pkg@1.0.0", tag], {
-        cwd: pkg.location,
-        env: {},
-        pkg,
-      });
+    expect(tags).toEqual({
+      "added-tag": "1.0.1",
     });
-
-    it("supports custom registry", async () => {
-      await npmDistTag.add(pkg, tag, { registry });
-
-      expect(ChildProcessUtilities.exec).lastCalledWith("npm", ["dist-tag", "add", "foo-pkg@1.0.0", tag], {
-        cwd: pkg.location,
-        env: {
-          npm_config_registry: registry,
+    expect(fetch).lastCalledWith(
+      "-/package/@scope%2fsome-pkg/dist-tags/added-tag",
+      expect.objectContaining({
+        method: "PUT",
+        body: JSON.stringify("1.0.1"),
+        headers: {
+          "content-type": "application/json",
         },
-        pkg,
-      });
-    });
+      })
+    );
   });
 
-  describe("npmDistTag.remove()", () => {
-    const pkg = {
-      name: "bar-pkg",
-      location: "/test/npm/dist-tag/remove",
-    };
-    const tag = "removed-tag";
-    const registry = "https://custom-registry/remove";
+  it("does not attempt to add duplicate of existing tag", async () => {
+    fetch.json.mockImplementationOnce(() =>
+      Promise.resolve({
+        latest: "1.0.0",
+        "dupe-tag": "1.0.1",
+      })
+    );
 
-    it("removes a dist-tag for a given package", async () => {
-      await npmDistTag.remove(pkg, tag, {});
+    const opts = new Map(baseOptions);
+    const tags = await npmDistTag.add("@scope/some-pkg@1.0.1", "dupe-tag", opts);
 
-      expect(ChildProcessUtilities.exec).lastCalledWith("npm", ["dist-tag", "rm", pkg.name, tag], {
-        cwd: pkg.location,
-        env: {},
-        pkg,
-      });
+    expect(tags).toEqual({
+      latest: "1.0.0",
+      "dupe-tag": "1.0.1",
     });
+    expect(fetch).not.toBeCalled();
+    expect(stubLog.warn).lastCalledWith("dist-tag", "@scope/some-pkg@dupe-tag already set to 1.0.1");
+  });
+});
 
-    it("supports custom registry", async () => {
-      await npmDistTag.remove(pkg, tag, { registry });
+describe("npmDistTag.remove()", () => {
+  it("removes an existing dist-tag for a given package", async () => {
+    fetch.json.mockImplementationOnce(() =>
+      Promise.resolve({
+        latest: "1.0.0",
+        "removed-tag": "1.0.1",
+      })
+    );
 
-      expect(ChildProcessUtilities.exec).lastCalledWith("npm", ["dist-tag", "rm", pkg.name, tag], {
-        cwd: pkg.location,
-        env: {
-          npm_config_registry: registry,
-        },
-        pkg,
-      });
-    });
+    const opts = new Map(baseOptions);
+    const tags = await npmDistTag.remove("@scope/some-pkg@1.0.1", "removed-tag", opts);
+
+    expect(tags).not.toHaveProperty("removed-tag");
+    expect(fetch).lastCalledWith(
+      "-/package/@scope%2fsome-pkg/dist-tags/removed-tag",
+      expect.objectContaining({
+        method: "DELETE",
+      })
+    );
   });
 
-  describe("npmDistTag.check()", () => {
-    const pkg = {
-      name: "baz-pkg",
-      location: "/test/npm/dist-tag/check",
-    };
-    const registry = "https://custom-registry/check";
+  it("does not attempt removal of nonexistent tag", async () => {
+    const opts = new Map(baseOptions);
+    const tags = await npmDistTag.remove("@scope/some-pkg@1.0.1", "missing-tag", opts);
 
-    it("tests if a dist-tag for a given package exists", () => {
-      ChildProcessUtilities.execSync.mockReturnValue(["latest", "target-tag"].join(os.EOL));
+    expect(tags).toEqual({});
+    expect(fetch).not.toBeCalled();
+    expect(stubLog.info).lastCalledWith("dist-tag", '"missing-tag" is not a dist-tag on @scope/some-pkg');
+  });
+});
 
-      expect(npmDistTag.check(pkg, "target-tag", {})).toBe(true);
-      expect(npmDistTag.check(pkg, "latest", {})).toBe(true);
-      expect(npmDistTag.check(pkg, "missing", {})).toBe(false);
+describe("npmDistTag.list()", () => {
+  it("returns dictionary of dist-tags", async () => {
+    fetch.json.mockImplementationOnce(() =>
+      Promise.resolve({
+        latest: "1.0.0",
+        "other-tag": "1.0.1",
+      })
+    );
 
-      expect(ChildProcessUtilities.execSync).lastCalledWith("npm", ["dist-tag", "ls", pkg.name], {
-        cwd: pkg.location,
-        env: {},
-        pkg,
-      });
+    const opts = new Map(baseOptions);
+    const tags = await npmDistTag.remove("@scope/some-pkg@1.0.1", opts);
+
+    expect(tags).toEqual({
+      latest: "1.0.0",
+      "other-tag": "1.0.1",
     });
-
-    it("supports custom registry", () => {
-      ChildProcessUtilities.execSync.mockReturnValue("target-tag");
-
-      expect(npmDistTag.check(pkg, "target-tag", { registry })).toBe(true);
-
-      expect(ChildProcessUtilities.execSync).lastCalledWith("npm", ["dist-tag", "ls", pkg.name], {
-        cwd: pkg.location,
-        env: {
-          npm_config_registry: registry,
-        },
-        pkg,
-      });
-    });
+    expect(fetch.json).lastCalledWith(
+      "-/package/@scope%2fsome-pkg/dist-tags",
+      expect.objectContaining({
+        spec: expect.objectContaining({
+          name: "@scope/some-pkg",
+        }),
+      })
+    );
   });
 });

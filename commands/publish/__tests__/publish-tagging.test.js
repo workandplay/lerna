@@ -28,7 +28,7 @@ test("publish --npm-tag", async () => {
   await lernaPublish(cwd)("--npm-tag", "custom");
 
   expect(npmPublish.registry.get("package-3")).toBe("custom");
-  expect(npmDistTag.check).not.toBeCalled();
+  expect(npmDistTag.remove).not.toBeCalled();
 });
 
 test("publish --temp-tag", async () => {
@@ -40,14 +40,15 @@ test("publish --temp-tag", async () => {
 
   expect(npmPublish.registry.get("package-4")).toBe("lerna-temp");
 
-  expect(npmDistTag.remove).lastCalledWith(
-    expect.objectContaining({ name: "package-4" }),
-    "lerna-temp",
-    expect.objectContaining({ registry: "test-registry" })
-  );
-  expect(npmDistTag.add).lastCalledWith(
-    expect.objectContaining({ name: "package-4", version: "1.0.1" }),
-    "latest",
-    expect.objectContaining({ registry: "test-registry" })
-  );
+  const conf = expect.objectContaining({
+    sources: expect.objectContaining({
+      cli: {
+        data: expect.objectContaining({
+          registry: "test-registry",
+        }),
+      },
+    }),
+  });
+  expect(npmDistTag.remove).lastCalledWith("package-4@1.0.1", "lerna-temp", conf);
+  expect(npmDistTag.add).lastCalledWith("package-4@1.0.1", "latest", conf);
 });
