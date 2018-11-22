@@ -4,6 +4,7 @@ const os = require("os");
 const chalk = require("chalk");
 const dedent = require("dedent");
 const minimatch = require("minimatch");
+const path = require("path");
 const pMap = require("p-map");
 const pPipe = require("p-pipe");
 const pReduce = require("p-reduce");
@@ -13,6 +14,7 @@ const semver = require("semver");
 const Command = require("@lerna/command");
 const ConventionalCommitUtilities = require("@lerna/conventional-commits");
 const checkWorkingTree = require("@lerna/check-working-tree");
+const describeRef = require("@lerna/describe-ref");
 const PromptUtilities = require("@lerna/prompt");
 const output = require("@lerna/output");
 const collectUpdates = require("@lerna/collect-updates");
@@ -37,6 +39,11 @@ function factory(argv) {
 }
 
 class VersionCommand extends Command {
+  constructor(argv){
+    super(argv);
+    this.submoduleMode = true;
+  }
+
   get otherCommandConfigs() {
     // back-compat
     return ["publish"];
@@ -459,8 +466,14 @@ class VersionCommand extends Command {
     // exec version lifecycle in root (after all updates)
     chain = chain.then(() => this.runPackageLifecycle(this.project.manifest, "version"));
 
+    console.log(this.commitAndTag, this.submoduleMode);
     if (this.commitAndTag) {
-      chain = chain.then(() => gitAdd(Array.from(changedFiles), this.execOpts));
+      if (this.submoduleMode) {
+        chain = chain.then(() => Promise.all(Array.from(changedFiles).map(changedFile => gitAdd([changedFile], { ...this.execOpts, cwd: path.dirname(changedFile) }))));
+      }
+      else {
+        chain = chain.then(() => gitAdd(Array.from(changedFiles), this.execOpts));
+      }
     }
 
     return chain;
@@ -494,7 +507,18 @@ class VersionCommand extends Command {
     const tags = this.packagesToVersion.map(pkg => `${pkg.name}@${this.updatesVersions.get(pkg.name)}`);
     const subject = this.options.message || "Publish";
     const message = tags.reduce((msg, tag) => `${msg}${os.EOL} - ${tag}`, `${subject}${os.EOL}`);
-
+    if (this.submoduleMode) {
+      return Promise.resolve()
+        .then(() => Promise.all(this.packagesToVersion.map(pkg => gitCommit(`${subject} ${pkg.name}@${this.updatesVersions.get(pkg.name)}`, this.gitOpts, { ...this.execOpts, cwd: pkg.location }))))
+        .then(() => gitAdd(this.packagesToVersion.map(pkg => pkg.location), this.execOpts))
+        .then(() => gitCommit(message, this.gitOpts, this.execOpts))
+        .then(() => gitTag(tags.join("-"), this.gitOpts, this.execOpts))
+        .then(() => Promise.all(this.packagesToVersion.map(pkg => {
+          const tag = `${pkg.name}@${this.updatesVersions.get(pkg.name)}`;
+          gitTag(tag, this.gitOpts, { ...this.execOpts, cwd: pkg.location });
+          return tag;
+        })));
+    }
     return Promise.resolve()
       .then(() => gitCommit(message, this.gitOpts, this.execOpts))
       .then(() => Promise.all(tags.map(tag => gitTag(tag, this.gitOpts, this.execOpts))))
@@ -517,7 +541,15 @@ class VersionCommand extends Command {
   gitPushToRemote() {
     this.logger.info("git", "Pushing tags...");
 
-    return gitPush(this.gitRemote, this.currentBranch, this.execOpts);
+    let res = "";
+    if (this.submoduleMode) {
+      for (const pkg of this.packagesToVersion) {
+        const execOpts = { ...this.execOpts, cwd: pkg.location };
+        res += gitPush(this.gitRemote, getCurrentBranch(execOpts), execOpts);
+      }
+    }
+    res += gitPush(this.gitRemote, this.currentBranch, this.execOpts);
+    return res;
   }
 }
 
