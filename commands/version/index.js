@@ -514,7 +514,7 @@ class VersionCommand extends Command {
         .then(() => gitCommit(message, this.gitOpts, this.execOpts))
         .then(() => gitTag(tags.join("-"), this.gitOpts, this.execOpts))
         .then(() => Promise.all(this.packagesToVersion.map(pkg => {
-          const tag = `${pkg.name}@${this.updatesVersions.get(pkg.name)}`;
+          const tag = `${this.updatesVersions.get(pkg.name)}`;
           gitTag(tag, this.gitOpts, { ...this.execOpts, cwd: pkg.location });
           return tag;
         })));
